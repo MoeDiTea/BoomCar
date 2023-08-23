@@ -1,0 +1,35 @@
+#本机版
+#!/bin/bash
+ifdown ens33;ifup ens33
+yum -y install net-tools
+ip=$(ip -4 addr show scope global | awk 'NR==2 {print $2}' | awk -F '/' '{print $1}')
+cd /etc/sysconfig/network-scripts
+sed -ri 's#BOOTPROTO="dhcp"#BOOTPROTO="none"#g' ifcfg-ens33
+cat >>/etc/sysconfig/network-scripts/ifcfg-ens33<<EOF
+IPADDR="${ip}"
+NETMASK="255.255.255.0"
+GATEWAY="192.168.12.2"
+DNS1=114.114.114.114
+DNS1="223.5.5.5"
+DNS2="223.6.6.6"
+EOF
+systemctl restart network
+
+
+
+#传参版
+#!/bin/bash
+ifdown ens33;ifup ens33
+yum -y install net-tools
+ip=$1
+cd /etc/sysconfig/network-scripts
+sed -ri 's#BOOTPROTO="dhcp"#BOOTPROTO="none"#g' ifcfg-ens33
+cat >>/etc/sysconfig/network-scripts/ifcfg-ens33<<EOF
+IPADDR="${ip}"
+NETMASK="255.255.255.0"
+GATEWAY="192.168.12.2"
+DNS1=114.114.114.114
+DNS1="223.5.5.5"
+DNS2="223.6.6.6"
+EOF
+systemctl restart network

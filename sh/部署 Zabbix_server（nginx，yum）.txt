@@ -1,0 +1,98 @@
+#!/bin/bash
+
+#关闭防火墙和selinux
+systemctl stop firewalld
+systemctl disable firewalld
+cd /etc/sysconfig/
+sed -ri 's#SELINUX=enforcing#SELINUX=disabled#g' selinux
+setenforce 0
+
+#配置zabbix源
+rpm -Uvh https://repo.zabbix.com/zabbix/5.0/rhel/7/x86_64/zabbix-release-5.0-1.el7.noarch.rpm
+#安装Zabbix server，Web前端，agent，数据库
+yum install zabbix-server-mysql zabbix-agent mariadb-server -y
+#安装SCL源
+yum install centos-release-scl -y
+#开启 zabbix-frontend 仓库
+sed -i '11c enabled=1' /etc/yum.repos.d/zabbix.repo
+#安装 Zabbix frontend 包
+yum install zabbix-web-mysql-scl zabbix-nginx-conf-scl -y
+#启动数据库并创建zabbix用户，zabbix库
+systemctl start mariadb
+sleep 5
+systemctl enable mariadb
+mysql -uroot -e'create database zabbix character set utf8 collate utf8_bin;'
+mysql -uroot -e'create user zabbix@localhost identified by "zabbix";'
+mysql -uroot -e"grant all privileges on zabbix.* to zabbix@localhost;" 
+mysql -uroot -e'flush privileges;'
+#导表
+zcat /usr/share/doc/zabbix-server-mysql*/create.sql.gz | mysql -uzabbix -p'zabbix' -D zabbix
+wait
+#配置Zabbix server
+sed -i "s/# DBPassword=/DBPassword=zabbix/" /etc/zabbix/zabbix_server.conf
+#为Zabbix前端配置PHP
+sed -i "s/        listen       80 default_server;/        listen       80;/" /etc/opt/rh/rh-nginx116/nginx/nginx.conf
+sed -i "s/        listen       \[::\]:80 default_server;/        listen       [::]:80;/" /etc/opt/rh/rh-nginx116/nginx/nginx.conf
+#编辑php配置文件
+sed -i "s/listen.acl_users = apache/listen.acl_users = apache,nginx/" /etc/opt/rh/rh-php72/php-fpm.d/zabbix.conf
+sed -i "/^; php_value\[date.timezone\]/s/.*/php_value[date.timezone] = Asia\/Shanghai/g" /etc/opt/rh/rh-php72/php-fpm.d/zabbix.conf
+#重启服务
+systemctl restart zabbix-server zabbix-agent rh-nginx116-nginx rh-php72-php-fpm
+wait
+#开机自启
+systemctl enable zabbix-server zabbix-agent rh-nginx116-nginx rh-php72-php-fpm && echo "zabbix server 已成功部署"
+
+
+
+
+
+
+
+----------------------------Zabbix agent端------------------------------
+
+---------------------------------关闭防火墙、selinux----------------------------
+
+systemctl stop firewalld  
+systemctl disable firewalld 
+sed -i '/SELINUX/s/enforcing/disabled/' /etc/selinux/config 
+setenforce 0
+
+1. agent安装
+[root@zabbix ~]#  rpm -Uvh https://repo.zabbix.com/zabbix/5.0/rhel/7/x86_64/zabbix-release-5.0-1.el7.noarch.rpm
+[root@zabbix ~]#  yum install centos-release-scl -y
+[root@zabbix ~]#  yum install -y zabbix-agent
+
+2. 修改agent配置文件
+[root@zabbix ~]#  vim /etc/zabbix/zabbix_agentd.conf
+PidFile=/var/run/zabbix/zabbix_agentd.pid
+LogFile=/var/log/zabbix/zabbix_agentd.log
+.....
+LogFileSize=0
+Server=192.168.10.11                        #被动模式服务器IP, 用于定义允许谁来采集数据
+# StartAgents=3                                 #被动模式情况下, 预生成的子进程数, 默认为3. 如果设置为0, 将关闭被动模式
+ServerActive=192.168.10.11              #主动模式服务器IP, 主动向谁上传数据
+Hostname=host2.qf.com                    #配置自己的主机名, 在后续配置监控项时要与此名称一致
+Include=/etc/zabbix/zabbix_agentd.d/*.conf
+
+3. 设置启动服务
+[root@zabbix ~]#  systemctl enable --now zabbix-agent
+[root@zabbix ~]#  systemctl start zabbix-agent
+[root@zabbix ~]#  netstat -tlnp |grep zabbix
+tcp        0      0 0.0.0.0:10050       0.0.0.0:*           LISTEN      9417/zabbix_agentd
+tcp6      0      0 :::10050                :::*                    LISTEN      9417/zabbix_agentd
+
+4. 测试是否联通
+给监控端yum安装zabbix-get，来测试：
+[root@wxb1 ~]# yum -y install zabbix-get
+[root@wxb1 ~]# zabbix_get -s 192.168.12.139 -p 10050 -k system.hostname		#写被监控端IP
+zabbix
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,154 @@
+#!/bin/bash
+#用source启动
+
+#关闭防火墙和selinux
+fire_se() {
+systemctl stop firewalld
+systemctl disable firewalld
+cd /etc/sysconfig/
+sed -ri 's#SELINUX=enforcing#SELINUX=disabled#g' selinux
+setenforce 0
+}
+
+
+#替换腾讯yum源
+yum_change() {
+yum -y install wget 
+wget -O /etc/yum.repos.d/CentOS-Base.repo http://mirrors.cloud.tencent.com/repo/centos7_base.repo 
+wget -O /etc/yum.repos.d/epel.repo http://mirrors.cloud.tencent.com/repo/epel-7.repo 
+yum clean all 
+yum makecache 
+yum -y install epel-release 
+}
+
+
+#安装基础软件
+install_soft() {
+yum -y install wget tar unzip vim grep net-tools ntp 
+yum groupinstall "Development Tools"  -y 
+}
+
+
+#部署JAVA 
+install_java() {
+#部署jdk包
+cd
+wget http://10.20.154.254/soft/jdk-8u211-linux-x64.tar.gz
+tar -xzvf jdk-8u211-linux-x64.tar.gz -C /usr/local
+mv /usr/local/jdk1.8.0_211/  /usr/local/java
+
+echo '
+JAVA_HOME=/usr/local/java       #指定java安装目录
+PATH=$JAVA_HOME/bin:$PATH       #用于指定java系统查找命令的路径
+export JAVA_HOME PATH           #类的路径，在编译运行java程序时，如果有调用到其他类的时候，在classpath中寻找需要的类。
+' >/etc/profile.d/jdk.sh
+
+#刷新环境变量
+source /etc/profile
+#查看java版本
+java -version
+}
+
+#部署tomcat
+install_tomcat() {	
+#下载tomcat
+cd
+wget http://10.20.154.254/soft/apache-tomcat-8.5.83.tar.gz
+#解压tomcat
+tar -xzvf apache-tomcat-8.5.83.tar.gz  -C /usr/local/
+#重命名
+mv /usr/local/apache-tomcat-8.5.83/ /usr/local/tomcat
+#定义Tomcat所需环境变量
+echo '
+CATALINA_HOME=/usr/local/tomcat
+export CATALINA_HOME
+' >>/etc/profile
+#刷新环境变量
+source  /etc/profile
+#设置系统启动tomcat
+echo "[Unit]
+Description=Apache Tomcat Web Application Container
+After=network.target
+
+[Service]
+Type=forking
+Environment="JAVA_HOME=/usr/local/java"
+ExecStart=/usr/local/tomcat/bin/startup.sh
+ExecReload=/bin/kill -s HUP $MAINPID
+ExecStop=/bin/kill -s QUIT $MAINPID
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+" >/usr/lib/systemd/system/tomcat.service
+systemctl daemon-reload
+systemctl enable tomcat
+
+#查看tomcat版本
+/usr/local/tomcat/bin/version.sh
+#启动tomcat
+/usr/local/tomcat/bin/startup.sh
+}
+
+#清除安装包
+delete_file() {
+cd
+rm -rf jdk-8u211-linux-x64.tar.gz
+rm -rf apache-tomcat-8.5.83.tar.gz
+}
+
+message() {
+	echo "Tomcat已部署完成！"
+	ROBOT='https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=028c9403-ab66-4e61-a967-0036ce1e1e7e'
+	TYPE='Content-Type: application/json'
+	curl ${ROBOT} -H "${TYPE}" -d \
+	'{
+	"msgtype": "text",
+	"text": {
+	"content": "
+	TomExam3.0与Tomcat已部署完成！
+	"}}'
+}
+
+
+while :
+do
+echo '
+++++++++++++++++++++++++++++++++++++++
++       1.  关闭防火墙和selinux         
++       2.  替换腾讯yum源         
++       3.  安装基础软件
++       4.  部署JAVA环境    
++       5.  部署tomcat服务器 
++       6.  清除安装包          
++       7.  一键全部部署         
++       q.  退出                 
+++++++++++++++++++++++++++++++++++++++
+'
+read -p "请输入：" num
+case $num in
+	1)
+	fire_se;;
+	2)
+	yum_change;;
+	3)
+	install_soft;;
+	4)
+	install_java;;
+	5)
+	install_tomcat;;
+	6)
+	delete_file;;
+	7)
+	fire_se;
+	yum_change;
+	install_soft;
+	install_java;
+	install_tomcat;
+	delete_file;;
+	q)
+	break;;
+	*)
+	echo "输入错误请重新输入！";;
+esac
+done

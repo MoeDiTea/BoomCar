@@ -1,0 +1,247 @@
+#!/bin/bash
+#用source启动脚本！
+
+#检查网络
+check_net(){
+echo -e "开始检查网络是否正常..."
+ping -c3 -w3 www.baidu.com &>/dev/null
+([ $? -eq 0 ] && echo "网络正常！") || (echo "网络异常，请检查网络！" && exit)
+sleep 3
+}
+
+
+#关闭防火墙和selinux
+fire_se() {
+systemctl stop firewalld
+systemctl disable firewalld
+cd /etc/sysconfig/
+sed -ri 's#SELINUX=enforcing#SELINUX=disabled#g' selinux
+setenforce 0
+}
+
+
+#替换腾讯yum源
+yum_change() {
+yum -y install wget 
+wget -O /etc/yum.repos.d/CentOS-Base.repo http://mirrors.cloud.tencent.com/repo/centos7_base.repo 
+wget -O /etc/yum.repos.d/epel.repo http://mirrors.cloud.tencent.com/repo/epel-7.repo 
+yum clean all 
+yum makecache 
+yum -y install epel-release 
+}
+
+
+#安装基础软件
+install_soft() {
+yum -y install wget tar unzip vim grep net-tools ntp 
+yum groupinstall "Development Tools"  -y 
+}
+
+
+#清除nginx数据
+clean_nginx(){	
+(ps -ef|grep nginx &>/dev/null && systemctl stop nginx &>/dev/null && systemctl disable nginx &>/dev/null && echo "系统中现有的nginx已停止并设置开机不自启") || (echo -e "\033[37;31;5m当前系统没有nginx在运行\033[39;49;0m")
+
+#删除旧的nginx用户
+echo -e "删除nginx用户"
+id nginx &>/dev/null && userdel -r nginx &>/dev/null && echo "nginx用户已删除"
+
+(find / -name '*nginx*' -exec rm -rf '{}' \; &>/dev/null && echo "nginx相关文件都已删除，可以开始安装nginx了！") || (echo -e "nginx相关文件都已清理！环境干净，可直接开始安装！")
+sleep 3
+}
+
+
+#yum安装nginx
+yum_install_nginx() {
+check_net;		#调用函数，安装前先检查网络
+clean_nginx;		        #调用函数，yum安装nginx之前先清理环境
+echo -e "开始yum安装nginx..."
+
+#写入nginx.repo文件
+echo ' [nginx-stable]
+name=nginx stable repo
+baseurl=http://nginx.org/packages/centos/$releasever/$basearch/
+gpgcheck=1
+enabled=1
+gpgkey=https://nginx.org/keys/nginx_signing.key
+module_hotfixes=true
+
+[nginx-mainline]
+name=nginx mainline repo
+baseurl=http://nginx.org/packages/mainline/centos/$releasever/$basearch/
+gpgcheck=1
+enabled=0
+gpgkey=https://nginx.org/keys/nginx_signing.key
+module_hotfixes=true ' > /etc/yum.repos.d/nginx.repo
+
+#安装yum工具包
+yum install yum-utils -y
+
+#清除缓存并生成新的缓存
+yum clean all && sleep 2 && yum makecache
+
+#安装nginx稳定版
+yum install nginx -y
+
+#查看nginx版本
+nginx -v
+if [[ $? -eq 0 ]]; then
+	(systemctl enable --now nginx) && (systemctl status nginx) && sleep 3 && (netstat -ntlp|grep nginx) && echo -e "启动成功，并已设置开机自启！"
+else
+	echo -e "安装异常，请检查服务器网络、yum源是否正常！"
+	break
+fi
+}
+
+
+#部署mysql
+install_mysql() {
+#下载mysql包
+cd
+wget https://cdn.mysql.com/archives/mysql-5.7/mysql-5.7.41-linux-glibc2.12-x86_64.tar.gz 
+
+#解压mysql
+tar xzvf mysql-5.7.41-linux-glibc2.12-x86_64.tar.gz -C /usr/local 
+wait
+
+#添加用户
+groupadd -g 27 mysql && useradd -g 27 -u 27 -M -s /sbin/nologin mysql
+mv  /usr/local/mysql-5.7.41-linux-glibc2.12-x86_64  /usr/local/mysql
+chown -R mysql:mysql /usr/local/mysql
+chmod 755 /usr/local/mysql/data/
+touch /var/log/mysql.log && chown mysql:mysql /var/log/mysql.log
+
+#编辑配置文件my.cnf
+echo '
+[mysqld]
+basedir=/usr/local/mysql
+datadir=/usr/local/mysql/data
+socket=/usr/local/mysql/data/mysql.sock
+port=3306
+default-storage-engine = innodb
+innodb_large_prefix=on
+innodb_file_per_table = on
+max_connections = 10000
+collation-server = utf8_general_ci
+character_set_server=utf8
+user=mysql
+
+[client]　　　　　　　　　　
+port = 3306
+socket = /usr/local/mysql/data/mysql.sock
+default-character-set = utf8
+
+[mysqld_safe]
+log-error=/var/log/mysql.log
+' >/etc/my.cnf
+
+#配置环境变量
+echo "
+export PATH=\${PATH}:/usr/local/mysql/bin
+" >>/etc/profile
+source /etc/profile
+
+#初始化数据库，产生随机登录密码
+mysqld --initialize --basedir=/usr/local/mysql/ --datadir=/usr/local/mysql/data --user=mysql &>/root/mysqlpass.txt
+wait
+
+#配置启动脚本
+echo '
+[Unit]
+Description=MySQL Server
+Documentation=man:mysqld(8)
+Documentation=http://dev.mysql.com/doc/refman/en/using-systemd.html
+After=network.target
+After=syslog.target
+
+[Install]
+WantedBy=multi-user.target
+
+[Service]
+User=mysql
+Group=mysql
+ExecStart=/usr/local/mysql/bin/mysqld --defaults-file=/etc/my.cnf
+LimitNOFILE = 5000	#设置操作系统默认允许mysql进程最大打开文件的数量
+' >/usr/lib/systemd/system/mysql.service
+
+#更新自启动服务，查看工作端口
+systemctl daemon-reload  
+systemctl enable mysql.service 
+/usr/local/mysql/support-files/mysql.server restart 
+systemctl enable --now mysql  
+netstat -ntpl | grep "3306"
+wait
+
+#修改mysql登录密码为wangxingbang
+passw=$(cat /root/mysqlpass.txt | grep "password" | awk -F "root@localhost:" '{print $NF}') 
+#echo $(cat /root/mysqlpass.txt | grep "password" | awk -F ":" '{print $NF}') 
+/usr/local/mysql/bin/mysqladmin -uroot -p`echo $passw`  password 'wangxingbang'  && echo -e "\n已关闭防火墙和selinux！\n已替换腾讯yum源并安装基础软件！\nmysql已成功部署，请用该密码登录mysql！登录密码为wangxingbang\n"
+wait
+}
+
+
+#清除安装包
+delete_file() {
+cd
+rm -rf mysql-5.7.41-linux-glibc2.12-x86_64.tar.gz
+}
+
+
+message() {
+	echo "MySQL、nginx已部署完成！"
+	ROBOT='https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=028c9403-ab66-4e61-a967-0036ce1e1e7e'
+	TYPE='Content-Type: application/json'
+	curl ${ROBOT} -H "${TYPE}" -d \
+	'{
+	"msgtype": "text",
+	"text": {
+	"content": "
+	MySQL、nginx已部署完成！
+	"}}'
+}
+
+while :
+do
+echo '
+++++++++++++++++++++++++++++++++++++++++++
++       1.  关闭防火墙和selinux         
++       2.  替换腾讯yum源         
++       3.  安装基础软件     
++       4.  清除nginx数据  
++       5.  yum安装nginx 
++       6.  部署mysql(二进制)          
++       7.  清除安装包   
++       8. 一键全部部署nginx、mysql 
++       q.  退出                 
+++++++++++++++++++++++++++++++++++++++++++
+'
+read -p "请输入：" num
+case $num in
+	1)
+	fire_se;;
+	2)
+	yum_change;;
+	3)
+	install_soft;;
+	4)
+	clean_nginx;;
+	5)
+	yum_install_nginx;;
+	6)
+	install_mysql;;
+	7)
+	delete_file;;
+	8)
+	fire_se;
+	yum_change;
+	install_soft;
+	clean_nginx;
+	yum_install_nginx;
+	install_mysql;
+	delete_file;;
+	q)
+	break;;
+	*)
+	echo "输入错误请重新输入！";;
+esac
+done

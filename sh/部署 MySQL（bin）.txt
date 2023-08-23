@@ -1,0 +1,158 @@
+#!/bin/bash
+#用source启动
+
+#关闭防火墙和selinux
+fire_se() {
+systemctl stop firewalld
+systemctl disable firewalld
+cd /etc/sysconfig/
+sed -ri 's#SELINUX=enforcing#SELINUX=disabled#g' selinux
+setenforce 0
+}
+
+#替换腾讯yum源
+yum_change() {
+yum -y install wget 
+wget -O /etc/yum.repos.d/CentOS-Base.repo http://mirrors.cloud.tencent.com/repo/centos7_base.repo 
+wget -O /etc/yum.repos.d/epel.repo http://mirrors.cloud.tencent.com/repo/epel-7.repo 
+yum clean all 
+yum makecache 
+yum -y install epel-release 
+}
+
+#安装基础软件
+install_soft() {
+yum -y install wget tar unzip vim grep net-tools ntp 
+yum groupinstall "Development Tools"  -y 
+}
+
+#部署mysql
+install_mysql() {
+#下载mysql包
+cd
+wget https://cdn.mysql.com/archives/mysql-5.7/mysql-5.7.41-linux-glibc2.12-x86_64.tar.gz 
+
+#解压mysql
+tar xzvf mysql-5.7.41-linux-glibc2.12-x86_64.tar.gz -C /usr/local 
+wait
+
+#添加用户
+groupadd -g 27 mysql && useradd -g 27 -u 27 -M -s /sbin/nologin mysql
+mv  /usr/local/mysql-5.7.41-linux-glibc2.12-x86_64  /usr/local/mysql
+chown -R mysql:mysql /usr/local/mysql
+chmod 755 /usr/local/mysql/data/
+touch /var/log/mysql.log && chown mysql:mysql /var/log/mysql.log
+
+#编辑配置文件my.cnf
+echo '
+[mysqld]
+basedir=/usr/local/mysql
+datadir=/usr/local/mysql/data
+socket=/usr/local/mysql/data/mysql.sock
+port=3306
+default-storage-engine = innodb
+innodb_large_prefix=on
+innodb_file_per_table = on
+max_connections = 10000
+collation-server = utf8_general_ci
+character_set_server=utf8
+user=mysql
+
+[client]　　　　　　　　　　
+port = 3306
+socket = /usr/local/mysql/data/mysql.sock
+default-character-set = utf8
+
+[mysqld_safe]
+log-error=/var/log/mysql.log
+' >/etc/my.cnf
+
+#配置环境变量
+echo "
+export PATH=\${PATH}:/usr/local/mysql/bin
+" >>/etc/profile
+source /etc/profile
+
+#初始化数据库，产生随机登录密码
+mysqld --initialize --basedir=/usr/local/mysql/ --datadir=/usr/local/mysql/data --user=mysql &>/root/mysqlpass.txt
+
+#配置启动脚本
+echo '
+[Unit]
+Description=MySQL Server
+Documentation=man:mysqld(8)
+Documentation=http://dev.mysql.com/doc/refman/en/using-systemd.html
+After=network.target
+After=syslog.target
+
+[Install]
+WantedBy=multi-user.target
+
+[Service]
+User=mysql
+Group=mysql
+ExecStart=/usr/local/mysql/bin/mysqld --defaults-file=/etc/my.cnf
+LimitNOFILE = 5000	#设置操作系统默认允许mysql进程最大打开文件的数量
+' >/usr/lib/systemd/system/mysql.service
+
+#更新自启动服务，查看工作端口
+systemctl daemon-reload  
+systemctl enable mysql.service 
+/usr/local/mysql/support-files/mysql.server restart 
+systemctl enable --now mysql  
+netstat -ntpl | grep "3306"
+
+#修改mysql登录密码为wangxingbang
+passw=$(cat /root/mysqlpass.txt | grep "password" | awk -F "root@localhost:" '{print $NF}') 
+#echo $(cat /root/mysqlpass.txt | grep "password" | awk -F ":" '{print $NF}') 
+/usr/local/mysql/bin/mysqladmin -uroot -p`echo $passw`  password 'wangxingbang'  && echo -e "\n已关闭防火墙和selinux！\n已替换腾讯yum源并安装基础软件！\nmysql已成功部署，请用该密码登录mysql！登录密码为wangxingbang\n"
+}
+
+
+#清除安装包
+delete_file() {
+cd
+rm -rf mysql-5.7.41-linux-glibc2.12-x86_64.tar.gz
+rm -rf TomExam.zip
+}
+
+
+while :
+do
+echo '
+++++++++++++++++++++++++++++++++++++++++
++       1.  关闭防火墙和selinux         
++       2.  替换腾讯yum源         
++       3.  安装基础软件     
++       4.  部署MySQL   
++       5.  清除安装包          
++       6.  一键全部部署         
++       q.  退出                 
+++++++++++++++++++++++++++++++++++++++++
+'
+read -p "请输入：" num
+case $num in
+	1)
+	fire_se;;
+	2)
+	yum_change;;
+	3)
+	install_soft;;
+	4)
+	install_mysql;;
+	5)
+	delete_file;;
+	6)
+	fire_se;
+	yum_change;
+	install_soft;
+	install_mysql;
+	delete_file;;
+	q)
+	break;;
+	*)
+	echo "输入错误请重新输入！";;
+esac
+done
+
+
