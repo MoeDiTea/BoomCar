@@ -1,0 +1,73 @@
+#!/bin/sh
+while :
+do
+echo '
++--------------------------------------------------------------------------------------------------------------------------------------------+
+|                            系统初始化功能                          
++--------------------------------------------------------------------------------------------------------------------------------------------+
+|                     1. 关闭firewalld防火墙和selinux
+|                     2. 替换现有yum源，下载腾讯云yum源
+|                     3. 安装常用的软件（wget/vim/telnet/lrzsz/net-tools/httpd-tools/ntpdate/lsof/tree）
+|                     4. 设置时间同步（每5分钟同步一次）
+|                     5. 配置历史操作记录，添加加时间戳、执行用户
+|                     6. 先打印当前终端语言（英文/中文），换成相反的语言（英文换成中文，中文换成英文），提示：/etc/locale.conf配置文件 
+|                     q. 退出
++--------------------------------------------------------------------------------------------------------------------------------------------+
+'
+        read  -p "请输入："  choose
+        case "$choose" in
+                "1")
+	systemctl stop firewalld
+	systemctl disable firewalld
+	cd /etc/sysconfig/
+	sed -ri 's#SELINUX=enforcing#SELINUX=disabled#g' selinux
+	setenforce 0
+;;
+                "2")
+	yum -y install wget 
+	wget -O /etc/yum.repos.d/CentOS-Base.repo http://mirrors.cloud.tencent.com/repo/centos7_base.repo 
+	wget -O /etc/yum.repos.d/epel.repo http://mirrors.cloud.tencent.com/repo/epel-7.repo 
+	yum clean all 
+	yum makecache 
+	yum -y install epel-release  
+;;
+                "3")
+                yum -y install wget vim telnet lrzsz net-tools httpd-tools ntpdate lsof tree unzip grep ntp bash-completion bash-completion-extras &>/dev/null
+	yum groupinstall "Development Tools"  -y 
+                break
+;;
+                "4")
+                systemctl start crond.service &>/dev/null
+                systemctl enable crond.service #&>/dev/null
+                cat > /var/spool/cron/root <<EOF
+                */5 * * * * /sbin/ntpdate cn.pool.ntp.org
+EOF
+;;
+                "5")
+                cat >>/etc/profile<<EOF
+                HISTTIMEFORMAT="%Y-%m-%d %H:%M:%S `whoami` "
+EOF
+                source /etc/profile
+;;
+                "6")
+                echo $(cat /etc/locale.conf | cut -d= -f2)
+                cat /etc/locale.conf | grep "zh_CN" &>/dev/null
+                        if [[ $? -eq 0 ]];then
+                                cat > /etc/locale.conf <<EOF
+                                LANG="en_US.UTF-8"
+EOF
+                        else
+                                cat > /etc/locale.conf <<EOF
+                                LANG="zh_CN.UTF-8"
+EOF
+                        fi
+                source /etc/locale.conf
+;;
+                "q")
+                break
+;;
+                *)
+                echo "请输入正确的按键！"
+;;
+esac
+done
